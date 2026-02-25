@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>TCM Assist - Transcripción en Vivo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        * { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { background: #0a0a0a; color: #fff; overflow: hidden; touch-action: none; margin: 0; }
+        .glass-panel { background: rgba(20,20,20,0.95); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.08); }
+        .agent-card { transition: all 0.3s; border-radius: 12px; padding: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); }
+        .agent-card.active { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); box-shadow: 0 0 15px rgba(59,130,246,0.2); }
+        .agent-card.processing { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.4); animation: pulse-amber 1.5s infinite; }
+        @keyframes pulse-amber { 0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,0.3); } 50% { box-shadow: 0 0 0 10px rgba(245,158,11,0); } }
+        .wave-bar { width: 3px; background: linear-gradient(to top, #3b82f6, #8b5cf6); border-radius: 2px; transition: height 0.05s; }
+        .live-text { border-right: 2px solid #3b82f6; animation: blink-cursor 1s infinite; }
+        @keyframes blink-cursor { 0%,100% { border-color: transparent; } 50% { border-color: #3b82f6; } }
+        .transcription-line { animation: fadeIn 0.2s forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .alert-banner { animation: slideIn 0.3s forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6, #7c3aed); border-radius: 12px; padding: 14px 28px; color: white; font-weight: 600; border: none; }
+        .btn-recording { background: linear-gradient(135deg, #ef4444, #dc2626); animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 0 20px rgba(239,68,68,0); } }
+        .thinking-dots::after { content: ''; animation: dots 1.5s steps(4,end) infinite; }
+        @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+        .scroll-hide::-webkit-scrollbar { display: none; }
+        .keyword-highlight { background: rgba(59,130,246,0.3); padding: 2px 6px; border-radius: 4px; font-weight: 500; }
+        .pattern-detected { background: rgba(168,85,247,0.3); padding: 2px 6px; border-radius: 4px; color: #c084fc; }
+        .gap-detected { background: rgba(245,158,11,0.3); padding: 2px 6px; border-radius: 4px; color: #fbbf24; }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col">
+
+    <!-- API Config Modal -->
+    <div id="apiModal" class="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6">
+        <div class="glass-panel w-full max-w-md rounded-2xl p-6">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">☯</div>
+                <h2 class="text-2xl font-bold">TCM Assist</h2>
+                <p class="text-gray-400 text-sm mt-2">Transcripción en tiempo real</p>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="text-xs text-gray-400 uppercase font-semibold">OpenAI API Key</label>
+                    <input type="password" id="apiKeyInput" placeholder="sk-..." class="w-full mt-2 bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none">
+                </div>
+
+                <div class="flex gap-2">
+                    <button onclick="saveConfig('whisper')" class="flex-1 py-3 rounded-xl bg-blue-500/20 text-blue-400 text-sm font-medium border border-blue-500/30">
+                        Solo Whisper<br><span class="text-xs opacity-70">Más rápido</span>
+                    </button>
+                    <button onclick="saveConfig('full')" class="flex-1 py-3 rounded-xl bg-purple-500/20 text-purple-400 text-sm font-medium border border-purple-500/30">
+                        Whisper + GPT-4<br><span class="text-xs opacity-70">Análisis completo</span>
+                    </button>
+                </div>
+
+                <button onclick="offlineMode()" class="w-full py-3 rounded-xl bg-white/5 text-gray-400 text-sm">
+                    Usar sin API (simulación)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="glass-panel h-14 flex items-center justify-between px-4 z-40 hidden" id="mainHeader">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-lg">☯</div>
+            <div>
+                <h1 class="font-bold text-base">TCM Assist</h1>
+                <div class="flex items-center gap-2 text-xs">
+                    <span id="apiStatus" class="px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400">● Esperando</span>
+                    <span id="timer" class="font-mono text-gray-500">00:00</span>
+                </div>
+            </div>
+        </div>
+        <div class="flex items-center gap-2">
+            <button onclick="toggleConfig()" class="px-3 py-1.5 rounded-lg bg-white/5 text-xs">⚙️ Config</button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex overflow-hidden hidden" id="mainContent">
+
+        <!-- Left: Camera -->
+        <div class="w-2/5 flex flex-col border-r border-white/10">
+            <div class="flex-1 bg-black relative">
+                <video id="cameraFeed" class="w-full h-full object-cover hidden" autoplay playsinline></video>
+                <div id="cameraPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center text-gray-600">
+                    <div class="text-5xl mb-3">📷</div>
+                    <p class="text-sm">Cámara lista</p>
+                </div>
+                <div id="arOverlay" class="absolute inset-0 pointer-events-none hidden">
+                    <div class="absolute top-3 left-3 bg-black/60 px-2 py-1 rounded text-xs">
+                        <span class="text-green-400 animate-pulse">●</span> LIVE
+                    </div>
+                </div>
+                <div class="absolute bottom-3 left-1/2 transform -translate-x-1/2 flex gap-2">
+                    <button onclick="toggleCamera()" class="w-12 h-12 rounded-full bg-green-500/80 flex items-center justify-center text-xl">📹</button>
+                    <button onclick="captureTongue()" id="tongueBtn" class="w-12 h-12 rounded-full bg-yellow-500/80 flex items-center justify-center text-xl hidden">👅</button>
+                </div>
+            </div>
+            <div class="h-32 glass-panel border-t border-white/10 p-3 overflow-y-auto scroll-hide">
+                <h3 class="text-xs font-semibold text-gray-400 mb-2 uppercase">Visual TCM</h3>
+                <div id="visualResults" class="text-gray-500 text-xs italic">Esperando captura...</div>
+            </div>
+        </div>
+
+        <!-- Right: Live Transcription & Agents -->
+        <div class="w-3/5 flex flex-col bg-black/20">
+
+            <!-- Live Audio & Transcription -->
+            <div class="h-2/5 glass-panel border-b border-white/10 p-4 flex flex-col">
+                <div class="flex justify-between items-center mb-3">
+                    <div class="flex items-center gap-2">
+                        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Transcripción en Vivo</h3>
+                        <span id="liveIndicator" class="hidden px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 text-xs animate-pulse">● LIVE</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="toggleRecording()" id="recordBtn" class="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-lg transition-all">🎤</button>
+                        <span id="processingBadge" class="hidden px-2 py-1 rounded-full bg-amber-500/20 text-amber-400 text-xs flex items-center gap-1">
+                            <span class="thinking-dots">Analizando</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Waveform -->
+                <div id="waveform" class="flex items-end gap-1 h-8 mb-3 opacity-50"></div>
+
+                <!-- LIVE TRANSCRIPTION AREA -->
+                <div class="flex-1 bg-black/40 rounded-xl p-3 overflow-y-auto scroll-hide relative">
+                    <!-- Texto en vivo (interino) -->
+                    <div id="liveTranscript" class="text-lg text-gray-300 leading-relaxed min-h-[2rem]">
+                        <span class="text-gray-600 italic text-sm">El texto aparecerá aquí mientras hablas...</span>
+                    </div>
+
+                    <!-- Separador -->
+                    <div id="transcriptDivider" class="hidden my-3 border-t border-white/10"></div>
+
+                    <!-- Texto finalizado -->
+                    <div id="finalTranscripts" class="space-y-2"></div>
+                </div>
+
+                <!-- Speaker indicator -->
+                <div class="flex gap-2 mt-2">
+                    <button onclick="setSpeaker('doctor')" id="btnDoctor" class="flex-1 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 text-xs font-medium border border-blue-500/30">👨‍⚕️ Dr.</button>
+                    <button onclick="setSpeaker('patient')" id="btnPatient" class="flex-1 py-1.5 rounded-lg bg-white/5 text-gray-400 text-xs border border-white/10">🧑 Paciente</button>
+                </div>
+            </div>
+
+            <!-- AGENTS STATUS - Monitoreo en vivo -->
+            <div class="h-1/4 glass-panel border-b border-white/10 p-3">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Agentes Analizando en Vivo</h3>
+                    <span id="agentActivity" class="text-xs text-gray-500">Inactivos</span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 h-full pb-4">
+                    <!-- Agente 1: Completitud -->
+                    <div id="agentCompleteness" class="agent-card flex flex-col justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-blue-400 text-base">✓</span>
+                            <span class="font-medium text-xs">Completitud</span>
+                        </div>
+                        <div class="mt-1">
+                            <p class="text-xs text-gray-500 leading-tight" id="completenessStatus">Esperando...</p>
+                            <div class="flex gap-1 mt-1 flex-wrap" id="completenessTags"></div>
+                        </div>
+                    </div>
+
+                    <!-- Agente 2: Profundización -->
+                    <div id="agentDepth" class="agent-card flex flex-col justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-amber-400 text-base">🔍</span>
+                            <span class="font-medium text-xs">Profundización</span>
+                        </div>
+                        <div class="mt-1">
+                            <p class="text-xs text-gray-500 leading-tight" id="depthStatus">Esperando...</p>
+                            <p class="text-xs text-amber-400 mt-1 hidden" id="depthSuggestion"></p>
+                        </div>
+                    </div>
+
+                    <!-- Agente 3: Protocolos TCM -->
+                    <div id="agentProtocol" class="agent-card flex flex-col justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-purple-400 text-base">☯</span>
+                            <span class="font-medium text-xs">Protocolos TCM</span>
+                        </div>
+                        <div class="mt-1">
+                            <p class="text-xs text-gray-500 leading-tight" id="protocolStatus">Base lista</p>
+                            <div class="flex gap-1 mt-1 flex-wrap" id="detectedPatterns"></div>
+                        </div>
+                    </div>
+
+                    <!-- Agente 4: Keywords -->
+                    <div id="agentKeywords" class="agent-card flex flex-col justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-green-400 text-base">⚡</span>
+                            <span class="font-medium text-xs">Keywords TCM</span>
+                        </div>
+                        <div class="mt-1">
+                            <p class="text-xs text-gray-500 leading-tight" id="keywordsStatus">Escaneando...</p>
+                            <div class="flex gap-1 mt-1 flex-wrap" id="detectedKeywords"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alerts Stream -->
+            <div class="flex-1 overflow-y-auto p-3 scroll-hide" id="alertsStream">
+                <div class="text-center text-gray-600 mt-8 text-sm">
+                    <div class="text-2xl mb-2">📊</div>
+                    <p>Las alertas aparecerán aquí</p>
+                    <p class="text-xs mt-1">Los agentes analizan cada 3-5 palabras</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div class="glass-panel h-16 border-t border-white/10 flex items-center justify-between px-4 hidden" id="bottomControls">
+        <div class="flex items-center gap-3">
+            <button onclick="startSession()" id="startBtn" class="btn-primary flex items-center gap-2 text-sm py-3 px-6">
+                <span>▶</span> Iniciar Sesión
+            </button>
+            <button onclick="endSession()" id="endBtn" class="hidden bg-red-500/90 px-4 py-3 rounded-xl font-semibold text-sm">
+                ⏹ Finalizar
+            </button>
+        </div>
+        <div class="text-xs text-gray-500" id="sessionInfo">Sesión no iniciada</div>
+    </div>
+
+    <script>
+        // Config
+        const config = {
+            apiKey: localStorage.getItem('tcm_api_key') || '',
+            mode: localStorage.getItem('tcm_mode') || 'whisper', // 'whisper', 'full', 'offline'
+            useApi: false
+        };
+
+        // Estado
+        const state = {
+            isRecording: false,
+            isSessionActive: false,
+            mediaRecorder: null,
+            audioChunks: [],
+            currentSpeaker: 'doctor',
+            transcriptBuffer: '', // Texto en construcción
+            finalTranscripts: [], // Textos completados
+            analysisQueue: [], // Cola para análisis
+            lastAnalysisTime: 0,
+            detectedData: {
+                symptoms: new Set(),
+                patterns: new Set(),
+                keywords: new Set(),
+                missingFields: ['sueño', 'digestión', 'heces', 'pulso', 'lengua'],
+                vagueDetected: false
+            }
+        };
+
+        // Base de datos TCM para análisis local rápido
+        const tcmDatabase = {
+            symptoms: {
+                'dolor cabeza': { pattern: 'Viento-Calor', points: 'GB20, LI4', priority: 'high' },
+                'mareo': { pattern: 'Subida Yang', points: 'LV3, GB20', priority: 'high' },
+                'nausea': { pattern: 'Rebeldía Qi', points: 'E36, R12', priority: 'medium' },
+                'vomito': { pattern: 'Estómago rebelde', points: 'E44, P6', priority: 'high' },
+                'insomnio': { pattern: 'Shen inestable', points: 'H7, C6', priority: 'medium' },
+                'fatiga': { pattern: 'Qi Xu', points: 'E36, B6', priority: 'medium' },
+                'palpitaciones': { pattern: 'Shen Xu', points: 'H7, C7', priority: 'high' },
+                'sudoracion': { pattern: 'Qi Xu', points: 'B6, K7', priority: 'low' },
+                'dolor abdominal': { pattern: 'Qi estancado', points: 'E25, R6', priority: 'medium' },
+                'estreñimiento': { pattern: 'Intestino seco', points: 'E25, SJ6', priority: 'medium' },
+                'diarrea': { pattern: 'Bazo Xu', points: 'E36, B20', priority: 'medium' }
+            },
+            keywords: {
+                'frio': 'Yang Xu', 'calor': 'Re', 'calor noche': 'Yin Xu',
+                'sequedad': 'Xue Xu', 'humedad': 'Shi', 'mareo': 'Yang ascendente',
+                'irritabilidad': 'Liver Qi', 'ansiedad': 'Shen'
+            },
+            vagueTerms: ['un poco', 'mas o menos', 'regular', 'normal', 'asi asi', 'aveces', 'no se', 'tal vez'],
+            questions: {
+                'dolor': '¿Dónde exactamente? ¿Irradia?',
+                'mareo': '¿Al levantarse? ¿Con movimientos?',
+                'insomnio': '¿Dificultad para dormir o mantener sueño?',
+                'fatiga': '¿Mejora con reposo? ¿Desde cuándo?'
+            }
+        };
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            // Crear waveform
+            const wf = document.getElementById('waveform');
+            for(let i=0; i<35; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'wave-bar';
+                bar.style.height = '4px';
+                wf.appendChild(bar);
+            }
+
+            if(config.apiKey) {
+                document.getElementById('apiKeyInput').value = config.apiKey;
+            }
+        });
+
+        function saveConfig(mode) {
+            const key = document.getElementById('apiKeyInput').value.trim();
+            if(!key.startsWith('sk-')) {
+                alert('API key inválida');
+                return;
+            }
+            config.apiKey = key;
+            config.mode = mode;
+            config.useApi = true;
+            localStorage.setItem('tcm_api_key', key);
+            localStorage.setItem('tcm_mode', mode);
+            initApp();
+        }
+
+        function offlineMode() {
+            config.useApi = false;
+            config.mode = 'offline';
+            initApp();
+        }
+
+        function initApp() {
+            document.getElementById('apiModal').classList.add('hidden');
+            document.getElementById('mainHeader').classList.remove('hidden');
+            document.getElementById('mainContent').classList.remove('hidden');
+            document.getElementById('bottomControls').classList.remove('hidden');
+
+            const status = document.getElementById('apiStatus');
+            if(config.useApi) {
+                status.textContent = config.mode === 'full' ? '● GPT-4 + Whisper' : '● Whisper';
+                status.className = 'px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs';
+            } else {
+                status.textContent = '● Offline';
+                status.className = 'px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400 text-xs';
+            }
+        }
+
+        function toggleConfig() {
+            document.getElementById('apiModal').classList.remove('hidden');
+        }
+
+        // GRABACIÓN EN TIEMPO REAL CON CHUNKS
+        async function toggleRecording() {
+            if(!state.isRecording) {
+                await startLiveRecording();
+            } else {
+                stopLiveRecording();
+            }
+        }
+
+        async function startLiveRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        sampleRate: 16000
+                    }
+                });
+
+                // Configurar para chunks pequeños (cada 2 segundos)
+                const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+                state.mediaRecorder = new MediaRecorder(stream, { 
+                    mimeType,
+                    audioBitsPerSecond: 16000
+                });
+
+                state.audioChunks = [];
+                state.isRecording = true;
+
+                // Procesar cada chunk de audio (cada 2 segundos)
+                state.mediaRecorder.ondataavailable = async (e) => {
+                    if(e.data.size > 0 && state.isRecording) {
+                        // Enviar a Whisper inmediatamente
+                        await processAudioChunk(e.data);
+                    }
+                };
+
+                // Iniciar con timeslice de 2000ms (2 segundos)
+                state.mediaRecorder.start(2000);
+
+                // UI
+                document.getElementById('recordBtn').classList.add('btn-recording');
+                document.getElementById('liveIndicator').classList.remove('hidden');
+                document.getElementById('processingBadge').classList.remove('hidden');
+                animateWaveform();
+
+                // Iniciar análisis periódico del buffer de texto
+                startLiveAnalysis();
+
+            } catch(err) {
+                alert('Error micrófono: ' + err.message);
+            }
+        }
+
+        function stopLiveRecording() {
+            state.isRecording = false;
+            if(state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+                state.mediaRecorder.stop();
+                state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
+            }
+
+            document.getElementById('recordBtn').classList.remove('btn-recording');
+            document.getElementById('liveIndicator').classList.add('hidden');
+            document.getElementById('processingBadge').classList.add('hidden');
+
+            // Finalizar último texto
+            if(state.transcriptBuffer.trim()) {
+                finalizeTranscript();
+            }
+        }
+
+        // PROCESAR CHUNK DE AUDIO (cada 2 segundos)
+        async function processAudioChunk(audioBlob) {
+            if(!config.useApi) {
+                // Modo offline: simular
+                simulateLiveTranscription();
+                return;
+            }
+
+            try {
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'chunk.webm');
+                formData.append('model', 'whisper-1');
+                formData.append('language', 'es');
+
+                const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${config.apiKey}` },
+                    body: formData
+                });
+
+                if(!response.ok) throw new Error('Whisper error');
+
+                const data = await response.json();
+                const text = (data.text || '').trim();
+
+                if(text) {
+                    // Agregar al buffer en vivo
+                    addToLiveBuffer(text);
+
+                    // Análisis inmediato
+                    analyzeLiveText(state.transcriptBuffer + ' ' + text);
+                }
+
+            } catch(err) {
+                console.error('Chunk error:', err);
+            }
+        }
+
+        // BUFFER EN VIVO
+        function addToLiveBuffer(newText) {
+            state.transcriptBuffer += ' ' + newText;
+
+            // Mostrar en UI con efecto de escritura
+            const liveDiv = document.getElementById('liveTranscript');
+            liveDiv.innerHTML = formatLiveText(state.transcriptBuffer);
+
+            // Auto-scroll
+            liveDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+
+        function formatLiveText(text) {
+            // Resaltar keywords detectados
+            let formatted = text;
+
+            // Resaltar síntomas
+            Object.keys(tcmDatabase.symptoms).forEach(symptom => {
+                if(text.toLowerCase().includes(symptom)) {
+                    formatted = formatted.replace(new RegExp(symptom, 'gi'), match => 
+                        `<span class="keyword-highlight">${match}</span>`);
+                }
+            });
+
+            // Resaltar términos vagos
+            tcmDatabase.vagueTerms.forEach(term => {
+                if(text.toLowerCase().includes(term)) {
+                    formatted = formatted.replace(new RegExp(term, 'gi'), match => 
+                        `<span class="gap-detected">${match}</span>`);
+                }
+            });
+
+            return formatted + '<span class="live-text"></span>';
+        }
+
+        // FINALIZAR TEXTO (cuando hay pausa o cambio de hablante)
+        function finalizeTranscript() {
+            if(!state.transcriptBuffer.trim()) return;
+
+            const finalText = state.transcriptBuffer.trim();
+            state.transcriptBuffer = '';
+
+            // Mover a finalizados
+            const finalDiv = document.createElement('div');
+            finalDiv.className = 'transcription-line p-2 rounded-lg text-sm mb-2 ' + 
+                (state.currentSpeaker === 'doctor' ? 'bg-blue-500/10 border-l-2 border-blue-500' : 'bg-green-500/10 border-l-2 border-green-500');
+            finalDiv.innerHTML = `
+                <div class="flex justify-between text-xs opacity-60 mb-1">
+                    <span>${state.currentSpeaker === 'doctor' ? '👨‍⚕️ Dr.' : '🧑 Paciente'}</span>
+                    <span>${new Date().toLocaleTimeString()}</span>
+                </div>
+                <p>${finalText}</p>
+            `;
+
+            document.getElementById('finalTranscripts').prepend(finalDiv);
+            document.getElementById('transcriptDivider').classList.remove('hidden');
+            document.getElementById('liveTranscript').innerHTML = '<span class="text-gray-600 italic text-sm">Continuando...</span>';
+
+            // Análisis profundo del texto completo
+            analyzeFinalText(finalText);
+
+            state.finalTranscripts.push({
+                speaker: state.currentSpeaker,
+                text: finalText,
+                time: Date.now()
+            });
+        }
+
+        // ANÁLISIS EN VIVO (cada cambio)
+        function analyzeLiveText(text) {
+            const now = Date.now();
+            if(now - state.lastAnalysisTime < 500) return; // Limitar a cada 500ms
+            state.lastAnalysisTime = now;
+
+            const lower = text.toLowerCase();
+
+            // Agente Keywords: Detectar síntomas en tiempo real
+            Object.keys(tcmDatabase.symptoms).forEach(symptom => {
+                if(lower.includes(symptom) && !state.detectedData.symptoms.has(symptom)) {
+                    state.detectedData.symptoms.add(symptom);
+                    updateKeywordsAgent(symptom, 'symptom');
+                    activateAgent('agentKeywords', 'processing');
+                }
+            });
+
+            // Agente Profundización: Detectar términos vagos
+            tcmDatabase.vagueTerms.forEach(term => {
+                if(lower.includes(term) && !state.detectedData.vagueDetected) {
+                    state.detectedData.vagueDetected = true;
+                    updateDepthAgent(term, text);
+                    activateAgent('agentDepth', 'processing');
+
+                    // Alerta inmediata
+                    createAlert('depth', '⚠️ Respuesta Vaga Detectada', 
+                        `"${term}" detectado. Sugerencia: ${getDepthQuestion(text)}`, 
+                        'amber');
+                }
+            });
+
+            // Agente Completitud: marcar campos como cubiertos cuando aparezcan
+            const fieldMatchers = {
+                'sueño': ['sueño','dormir','insomnio'],
+                'digestión': ['digestión','comer','apetito','nausea','vomito'],
+                'heces': ['heces','evacuar','diarrea','estreñimiento'],
+                'pulso': ['pulso'],
+                'lengua': ['lengua']
+            };
+            Object.entries(fieldMatchers).forEach(([field, tokens]) => {
+                if(tokens.some(t => lower.includes(t))) {
+                    state.detectedData.missingFields = state.detectedData.missingFields.filter(f => f !== field);
+                    updateCompletenessAgent();
+                }
+            });
+        }
+
+        // ANÁLISIS PROFUNDO (con GPT-4 si está disponible)
+        async function analyzeFinalText(text) {
+            if(config.mode !== 'full' || !config.useApi) {
+                // Análisis local
+                analyzeLocalDeep(text);
+                return;
+            }
+
+            activateAgent('agentProtocol', 'processing');
+
+            try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${config.apiKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: 'gpt-4',
+                        messages: [{
+                            role: 'system',
+                            content: 'Eres un experto en TCM. Analiza el texto del paciente y responde en JSON: {"patron": "nombre", "puntos": ["p1","p2"], "formula": "nombre", "alerta": "texto o null"}'
+                        }, {
+                            role: 'user',
+                            content: text
+                        }],
+                        temperature: 0.3,
+                        max_tokens: 300
+                    })
+                });
+
+                const data = await response.json();
+                const analysis = JSON.parse(data.choices[0].message.content);
+
+                if(analysis.patron) {
+                    state.detectedData.patterns.add(analysis.patron);
+                    updateProtocolAgent(analysis);
+
+                    createAlert('protocol', `☯ ${analysis.patron}`, 
+                        `Puntos: ${analysis.puntos.join(', ')}<br>Fórmula: ${analysis.formula}`, 
+                        'purple');
+                }
+
+                if(analysis.alerta) {
+                    createAlert('medical', '⚠️ Alerta', analysis.alerta, 'red');
+                }
+
+            } catch(err) {
+                console.error('GPT error:', err);
+                analyzeLocalDeep(text);
+            }
+        }
+
+        function analyzeLocalDeep(text) {
+            const lower = text.toLowerCase();
+
+            // Detectar combinaciones
+            if(lower.includes('mareo') && lower.includes('nausea')) {
+                if(!state.detectedData.patterns.has('Shaoyang')) {
+                    state.detectedData.patterns.add('Shaoyang');
+                    updateProtocolAgent({
+                        patron: 'Shaoyang (Síndrome de medio)',
+                        puntos: ['GB20', 'TB5', 'LV3'],
+                        formula: 'Xiao Chai Hu Tang'
+                    });
+
+                    createAlert('protocol', '🔴 Patrón Complejo: Shaoyang', 
+                        'Alternancia frío/calor, mareo, náuseas. Tratamiento: Xiao Chai Hu Tang', 
+                        'red');
+                }
+            }
+        }
+
+        // UPDATES DE AGENTES EN UI
+        function updateKeywordsAgent(keyword, type) {
+            const container = document.getElementById('detectedKeywords');
+            const tag = document.createElement('span');
+            tag.className = 'px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs animate-pulse';
+            tag.textContent = keyword;
+            container.appendChild(tag);
+
+            document.getElementById('keywordsStatus').textContent = `${state.detectedData.symptoms.size} síntomas`;
+            updateAgentActivity();
+        }
+
+        function updateDepthAgent(term, context) {
+            document.getElementById('depthStatus').textContent = `Detectado: "${term}"`;
+            const suggestion = getDepthQuestion(context);
+            document.getElementById('depthSuggestion').textContent = `💡 ${suggestion}`;
+            document.getElementById('depthSuggestion').classList.remove('hidden');
+            updateAgentActivity();
+        }
+
+        function getDepthQuestion(text) {
+            const lower = text.toLowerCase();
+            for(let [key, question] of Object.entries(tcmDatabase.questions)) {
+                if(lower.includes(key)) return question;
+            }
+            return '¿Podría especificar más detalles?';
+        }
+
+        function updateCompletenessAgent() {
+            const missing = state.detectedData.missingFields;
+            document.getElementById('completenessStatus').textContent = 
+                missing.length === 0 ? '✓ Historia completa' : `Faltan: ${missing.slice(0,2).join(', ')}`;
+
+            const tags = document.getElementById('completenessTags');
+            tags.innerHTML = '';
+            const completed = ['sueño', 'digestión', 'heces', 'pulso', 'lengua'].filter(f => !missing.includes(f));
+            completed.forEach(c => {
+                const tag = document.createElement('span');
+                tag.className = 'px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 text-xs';
+                tag.textContent = '✓' + c;
+                tags.appendChild(tag);
+            });
+
+            if(missing.length === 0) activateAgent('agentCompleteness', 'active');
+            updateAgentActivity();
+        }
+
+        function updateProtocolAgent(analysis) {
+            document.getElementById('protocolStatus').textContent = analysis.patron;
+            const container = document.getElementById('detectedPatterns');
+            const tag = document.createElement('span');
+            tag.className = 'px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 text-xs';
+            tag.textContent = analysis.patron;
+            container.appendChild(tag);
+            updateAgentActivity();
+        }
+
+        function updateAgentActivity() {
+            const active = document.querySelectorAll('.agent-card.processing, .agent-card.active').length;
+            document.getElementById('agentActivity').textContent = 
+                active === 0 ? 'Inactivos' : `${active} analizando...`;
+        }
+
+        function activateAgent(id, status) {
+            const el = document.getElementById(id);
+            el.classList.remove('active', 'processing');
+            if(status === 'processing') el.classList.add('processing');
+            else if(status === 'active') el.classList.add('active');
+        }
+
+        // SIMULACIÓN OFFLINE
+        function simulateLiveTranscription() {
+            const phrases = [
+                'Doctor, me duele la cabeza',
+                'un poco desde ayer',
+                'y me mareo cuando me levanto',
+                'también tengo náuseas por la mañana',
+                'mi digestión está regular'
+            ];
+
+            let i = 0;
+            const interval = setInterval(() => {
+                if(!state.isRecording || i >= phrases.length) {
+                    clearInterval(interval);
+                    return;
+                }
+
+                addToLiveBuffer(phrases[i]);
+                analyzeLiveText(state.transcriptBuffer + ' ' + phrases[i]);
+                i++;
+            }, 2500);
+        }
+
+        // UTILIDADES
+        function setSpeaker(speaker) {
+            // Finalizar texto anterior si existe
+            if(state.transcriptBuffer.trim()) {
+                finalizeTranscript();
+            }
+
+            state.currentSpeaker = speaker;
+            document.getElementById('btnDoctor').className = speaker === 'doctor' 
+                ? 'flex-1 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 text-xs font-medium border border-blue-500/30'
+                : 'flex-1 py-1.5 rounded-lg bg-white/5 text-gray-400 text-xs border border-white/10';
+            document.getElementById('btnPatient').className = speaker === 'patient'
+                ? 'flex-1 py-1.5 rounded-lg bg-green-500/20 text-green-400 text-xs font-medium border border-green-500/30'
+                : 'flex-1 py-1.5 rounded-lg bg-white/5 text-gray-400 text-xs border border-white/10';
+        }
+
+        function createAlert(type, title, message, color) {
+            const colors = {
+                red: 'bg-red-500/15 border-red-500/40 text-red-400',
+                amber: 'bg-amber-500/15 border-amber-500/40 text-amber-400',
+                blue: 'bg-blue-500/15 border-blue-500/40 text-blue-400',
+                purple: 'bg-purple-500/15 border-purple-500/40 text-purple-400',
+                green: 'bg-green-500/15 border-green-500/40 text-green-400',
+                pink: 'bg-pink-500/15 border-pink-500/40 text-pink-400'
+            };
+
+            const alert = document.createElement('div');
+            alert.className = `alert-banner glass-panel p-3 rounded-lg border-l-4 ${colors[color] || colors.blue} pointer-events-auto mb-2`;
+            alert.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <div class="font-bold text-sm mb-0.5">${title}</div>
+                        <div class="text-xs opacity-90 leading-snug">${message}</div>
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" class="text-xs opacity-50 ml-2">✕</button>
+                </div>
+            `;
+
+            const container = document.getElementById('alertsStream');
+            if(container.children[0]?.classList.contains('text-center')) container.innerHTML = '';
+            container.prepend(alert);
+
+            if(navigator.vibrate) navigator.vibrate(50);
+        }
+
+        function animateWaveform() {
+            const bars = document.querySelectorAll('.wave-bar');
+            const interval = setInterval(() => {
+                if(!state.isRecording) {
+                    clearInterval(interval);
+                    bars.forEach(b => b.style.height = '4px');
+                    document.getElementById('waveform').classList.add('opacity-50');
+                    return;
+                }
+                document.getElementById('waveform').classList.remove('opacity-50');
+                bars.forEach(bar => {
+                    bar.style.height = Math.random() * 30 + 5 + 'px';
+                });
+            }, 50);
+        }
+
+        function startLiveAnalysis() {
+            // Análisis periódico del buffer
+            setInterval(() => {
+                if(state.isRecording && state.transcriptBuffer.length > 20) {
+                    analyzeLiveText(state.transcriptBuffer);
+                }
+            }, 1000);
+        }
+
+        // Control de sesión
+        function startSession() {
+            state.isSessionActive = true;
+            document.getElementById('startBtn').classList.add('hidden');
+            document.getElementById('endBtn').classList.remove('hidden');
+            document.getElementById('sessionInfo').textContent = 'Sesión activa - Esperando audio';
+
+            // Iniciar grabación automáticamente
+            toggleRecording();
+        }
+
+        function endSession() {
+            stopLiveRecording();
+            state.isSessionActive = false;
+            document.getElementById('startBtn').classList.remove('hidden');
+            document.getElementById('endBtn').classList.add('hidden');
+            document.getElementById('sessionInfo').textContent = 'Sesión finalizada';
+        }
+
+        // Cámara (igual que antes)
+        async function toggleCamera() {
+            if(!state.cameraActive) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                    document.getElementById('cameraFeed').srcObject = stream;
+                    document.getElementById('cameraFeed').classList.remove('hidden');
+                    document.getElementById('cameraPlaceholder').classList.add('hidden');
+                    document.getElementById('arOverlay').classList.remove('hidden');
+                    document.getElementById('tongueBtn').classList.remove('hidden');
+                    state.cameraActive = true;
+                } catch(err) {
+                    alert('Error cámara: ' + err.message);
+                }
+            } else {
+                const stream = document.getElementById('cameraFeed').srcObject;
+                if(stream) stream.getTracks().forEach(t => t.stop());
+                document.getElementById('cameraFeed').classList.add('hidden');
+                document.getElementById('cameraPlaceholder').classList.remove('hidden');
+                document.getElementById('arOverlay').classList.add('hidden');
+                document.getElementById('tongueBtn').classList.add('hidden');
+                state.cameraActive = false;
+            }
+        }
+
+        function captureTongue() {
+            // Simulación rápida
+            document.getElementById('visualResults').innerHTML = `
+                <div class="bg-pink-500/10 border border-pink-500/30 p-2 rounded-lg">
+                    <div class="text-pink-400 font-semibold text-xs mb-1">👅 Lengua analizada</div>
+                    <div class="text-xs">Roja, saburra amarilla → Calor-Humedad</div>
+                </div>
+            `;
+            createAlert('visual', 'Análisis Visual', 'Calor-Humedad en Estómago', 'pink');
+        }
+    </script>
+</body>
+</html>
